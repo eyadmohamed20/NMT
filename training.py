@@ -1,9 +1,6 @@
 """
-UPDATED Training Script with Fixed Tokenizers
-Key changes:
-1. Uses new tokenizers (tokenizer_en_v2, tokenizer_fr_v2)
-2. Increased model size (d_model: 32 → 256)
-3. Proper handling of distinct PAD/EOS tokens
+Training script for the Part 1 Transformer model.
+Direction: French source -> English target.
 """
 
 import torch
@@ -21,7 +18,7 @@ from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 DATASET_PATH = "parallel_en_fr_corpus"
 EN_TOKENIZER_PATH = "tokenizer_en_v2"  # ← CHANGED from tokenizer_en
 FR_TOKENIZER_PATH = "tokenizer_fr_v2"  # ← CHANGED from tokenizer_fr
-CHECKPOINT_DIR = "checkpoints_v2"      # ← NEW directory to avoid conflicts
+CHECKPOINT_DIR = "checkpoints_fr_en"   # French -> English checkpoints
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -44,13 +41,13 @@ en_tokenizer = PreTrainedTokenizerFast.from_pretrained(EN_TOKENIZER_PATH)
 fr_tokenizer = PreTrainedTokenizerFast.from_pretrained(FR_TOKENIZER_PATH)
 
 # Get special token IDs
-src_pad_id = en_tokenizer.pad_token_id
-tgt_pad_id = fr_tokenizer.pad_token_id
-bos_token_id = fr_tokenizer.bos_token_id
-eos_token_id = fr_tokenizer.eos_token_id
+src_pad_id = fr_tokenizer.pad_token_id
+tgt_pad_id = en_tokenizer.pad_token_id
+bos_token_id = en_tokenizer.bos_token_id
+eos_token_id = en_tokenizer.eos_token_id
 
-src_vocab_size = len(en_tokenizer)
-tgt_vocab_size = len(fr_tokenizer)
+src_vocab_size = len(fr_tokenizer)
+tgt_vocab_size = len(en_tokenizer)
 
 # ============================================================================
 # CRITICAL VERIFICATION
@@ -58,10 +55,10 @@ tgt_vocab_size = len(fr_tokenizer)
 print("\n" + "="*70)
 print("TOKENIZER VERIFICATION")
 print("="*70)
-print(f"Source (EN) vocab size: {src_vocab_size}")
-print(f"Target (FR) vocab size: {tgt_vocab_size}")
+print(f"Source (FR) vocab size: {src_vocab_size}")
+print(f"Target (EN) vocab size: {tgt_vocab_size}")
 print(f"\nSource special tokens:")
-print(f"  PAD: {src_pad_id}, BOS: {en_tokenizer.bos_token_id}, EOS: {en_tokenizer.eos_token_id}")
+print(f"  PAD: {src_pad_id}, BOS: {fr_tokenizer.bos_token_id}, EOS: {fr_tokenizer.eos_token_id}")
 print(f"\nTarget special tokens:")
 print(f"  PAD: {tgt_pad_id}, BOS: {bos_token_id}, EOS: {eos_token_id}")
 
@@ -80,20 +77,21 @@ print("="*70)
 MAX_LEN = 64
 
 def tokenize_pair(example):
-    src = en_tokenizer(
-        example['text_en'],
-        add_special_tokens=True,
-        max_length=MAX_LEN,
-        truncation=True,
-        padding=False
-    )['input_ids']
-    tgt = fr_tokenizer(
+    src = fr_tokenizer(
         example['text_fr'],
         add_special_tokens=True,
         max_length=MAX_LEN,
         truncation=True,
         padding=False
     )['input_ids']
+    tgt = en_tokenizer(
+        example['text_en'],
+        add_special_tokens=True,
+        max_length=MAX_LEN,
+        truncation=True,
+        padding=False
+    )['input_ids']
+
     return {'src': src, 'tgt': tgt}
 
 print("\nTokenizing datasets...")
@@ -279,16 +277,16 @@ def beam_search(model, src_tokens, src_mask, beam_width=4, max_len=64, min_len=3
 # ============================================================================
 # DEBUGGING HELPER
 # ============================================================================
-def debug_sample_prediction(model, sample_en="i am a cat", sample_fr="je suis un chat"):
+def debug_sample_prediction(model, sample_fr="je suis un chat", sample_en="i am a cat"):
     """Debug if model generates EOS tokens"""
     print("\n" + "="*70)
     print("DEBUGGING SAMPLE PREDICTION")
     print("="*70)
-    print(f"Input: '{sample_en}'")
+    print(f"Input: '{sample_fr}'")
     
     model.eval()
     
-    src_tokens = en_tokenizer(sample_en, add_special_tokens=True, return_tensors='pt').to(device)
+    src_tokens = fr_tokenizer(sample_fr, add_special_tokens=True, return_tensors='pt').to(device)
     src_ids = src_tokens['input_ids']
     src_mask = (src_ids != src_pad_id).unsqueeze(1).unsqueeze(2).bool()
     
@@ -305,7 +303,8 @@ def debug_sample_prediction(model, sample_en="i am a cat", sample_fr="je suis un
         tgt_len = len(tgt_ids)
         tgt_pad_mask = (tgt_tensor != tgt_pad_id).unsqueeze(1).unsqueeze(2).bool()
         causal_mask = torch.tril(torch.ones((tgt_len, tgt_len), device=device)).bool()
-        tgt_mask = tgt_pad_mask.unsqueeze(0) & causal_mask.unsqueeze(0)
+        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+        tgt_mask = tgt_pad_mask & causal_mask
         
         with torch.no_grad():
             out = model.decode(tgt_tensor, encoder_out, tgt_mask, src_mask)
@@ -316,7 +315,7 @@ def debug_sample_prediction(model, sample_en="i am a cat", sample_fr="je suis un
             top3_probs, top3_ids = torch.topk(probs, 3)
             
             next_token = top3_ids[0].item()
-            token_str = fr_tokenizer.decode([next_token])
+            token_str = en_tokenizer.decode([next_token])
             
             is_special = ""
             if next_token == eos_token_id:
@@ -337,9 +336,9 @@ def debug_sample_prediction(model, sample_en="i am a cat", sample_fr="je suis un
     else:
         print(f"\n❌ Model did NOT generate EOS in 20 steps!")
     
-    final = fr_tokenizer.decode(tgt_ids, skip_special_tokens=True)
+    final = en_tokenizer.decode(tgt_ids, skip_special_tokens=True)
     print(f"Translation: '{final}'")
-    print(f"Expected: '{sample_fr}'")
+    print(f"Expected: '{sample_en}'")
     print("="*70)
 
 # ============================================================================
@@ -531,7 +530,7 @@ print("\nComputing BLEU score...")
 bleu = compute_bleu(model, test_loader, beam_width=4, max_samples=100, min_len=3) 
 print(f"BLEU-4 score: {bleu:.4f}")
 # Final debug
-debug_sample_prediction(model, "i am a student", "je suis étudiant")
+debug_sample_prediction(model, "je suis étudiant", "i am a student")
 
 print("\n" + "="*70)
 print("✅ TRAINING COMPLETE!")

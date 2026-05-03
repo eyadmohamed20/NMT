@@ -15,9 +15,9 @@ import numpy as np
 # Paths & Setup
 # -------------------------------
 DATASET_PATH = "parallel_en_fr_corpus"
-EN_TOKENIZER_PATH = "tokenizer_en"
-FR_TOKENIZER_PATH = "tokenizer_fr"
-CHECKPOINT_DIR = "checkpoints"
+EN_TOKENIZER_PATH = "tokenizer_en_v2"
+FR_TOKENIZER_PATH = "tokenizer_fr_v2"
+CHECKPOINT_DIR = "checkpoints_fr_en"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 ATTENTION_VIZ_DIR = "attention_viz"
 os.makedirs(ATTENTION_VIZ_DIR, exist_ok=True)
@@ -43,46 +43,46 @@ en_tokenizer = PreTrainedTokenizerFast.from_pretrained(EN_TOKENIZER_PATH)
 fr_tokenizer = PreTrainedTokenizerFast.from_pretrained(FR_TOKENIZER_PATH)
 
 # Separate source and target pad tokens (critical)
-src_pad_id = en_tokenizer.pad_token_id
-tgt_pad_id = fr_tokenizer.pad_token_id
+src_pad_id = fr_tokenizer.pad_token_id
+tgt_pad_id = en_tokenizer.pad_token_id
 
-bos_token_id = fr_tokenizer.bos_token_id
-eos_token_id = fr_tokenizer.eos_token_id
+bos_token_id = en_tokenizer.bos_token_id
+eos_token_id = en_tokenizer.eos_token_id
 
-src_vocab_size = len(en_tokenizer)
-tgt_vocab_size = len(fr_tokenizer)
+src_vocab_size = len(fr_tokenizer)
+tgt_vocab_size = len(en_tokenizer)
 # Add this after loading tokenizers
 print("\n=== Tokenizer Debug Info ===")
 print(f"Source pad_token_id: {src_pad_id}")
 print(f"Target pad_token_id: {tgt_pad_id}")
 print(f"BOS token_id: {bos_token_id}")
 print(f"EOS token_id: {eos_token_id}")
-print(f"Target pad_token string: '{fr_tokenizer.pad_token}'")
-print(f"Target eos_token string: '{fr_tokenizer.eos_token}'")
+print(f"Target pad_token string: '{en_tokenizer.pad_token}'")
+print(f"Target eos_token string: '{en_tokenizer.eos_token}'")
 
 # Check if pad and eos are the same
 if tgt_pad_id == eos_token_id:
     print("❌ CRITICAL: PAD and EOS tokens are the SAME! This will break training!")
 
-# Also check the actual tokens for the repeating word "aussi"
-test_ids = fr_tokenizer("aussi", add_special_tokens=False)['input_ids']
-print(f"Token IDs for 'aussi': {test_ids}")
-print(f"Token string for ID {test_ids[0] if test_ids else 'N/A'}: '{fr_tokenizer.decode([test_ids[0]]) if test_ids else 'N/A'}'")
+# Also check an English target-side token.
+test_ids = en_tokenizer("also", add_special_tokens=False)['input_ids']
+print(f"Token IDs for 'also': {test_ids}")
+print(f"Token string for ID {test_ids[0] if test_ids else 'N/A'}: '{en_tokenizer.decode([test_ids[0]]) if test_ids else 'N/A'}'")
 # -------------------------------
 # Tokenization
 # -------------------------------
 MAX_LEN = 64   # increased for BPE subwords
 
 def tokenize_pair(example):
-    src = en_tokenizer(
-        example['text_en'],
+    src = fr_tokenizer(
+        example['text_fr'],
         add_special_tokens=True,
         max_length=MAX_LEN,
         truncation=True,
         padding=False
     )['input_ids']
-    tgt = fr_tokenizer(
-        example['text_fr'],
+    tgt = en_tokenizer(
+        example['text_en'],
         add_special_tokens=True,
         max_length=MAX_LEN,
         truncation=True,
@@ -130,7 +130,7 @@ test_loader  = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, co
 # -------------------------------
 from model import build_transformer   # Your model code (must store attention scores)
 
-d_model = 32; d_ff = 128; h = 4; N = 3; dropout = 0.1
+d_model = 512; d_ff = 2048; h = 8; N = 4; dropout = 0.1
 model = build_transformer(src_vocab_size, tgt_vocab_size,
                           MAX_LEN, MAX_LEN, d_model, N, h, dropout, d_ff)
 model.to(device)
@@ -214,12 +214,12 @@ def beam_search(model, src_tokens, src_mask, beam_width=4, max_len=64, temperatu
         best_seq = best_seq[:-1]
     return best_seq
 
-def translate_sentence(model, sentence, en_tokenizer, fr_tokenizer, beam_width=4):
-    tokens = en_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
+def translate_sentence(model, sentence, fr_tokenizer, en_tokenizer, beam_width=4):
+    tokens = fr_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
     src_ids = tokens['input_ids'].to(device)
     src_mask = (src_ids != src_pad_id).unsqueeze(1).unsqueeze(2).bool()
     pred_ids = beam_search(model, src_ids, src_mask, beam_width)
-    return fr_tokenizer.decode(pred_ids, skip_special_tokens=True)
+    return en_tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 # -------------------------------
 # BLEU Score Computation (using token ids, not splits)
@@ -261,8 +261,8 @@ def compute_bleu(model, dataloader, beam_width=4, max_samples=None):
 # -------------------------------
 def get_attention_weights(model, src_text, tgt_text, layer_idx=-1, head_idx=0):
     model.eval()
-    src_tokens = en_tokenizer(src_text, add_special_tokens=True, return_tensors='pt').to(device)
-    tgt_tokens = fr_tokenizer(tgt_text, add_special_tokens=True, return_tensors='pt').to(device)
+    src_tokens = fr_tokenizer(src_text, add_special_tokens=True, return_tensors='pt').to(device)
+    tgt_tokens = en_tokenizer(tgt_text, add_special_tokens=True, return_tensors='pt').to(device)
     src_ids = src_tokens['input_ids']
     tgt_ids = tgt_tokens['input_ids']
 
@@ -431,14 +431,14 @@ print(f"BLEU-4 score (corpus, smoothed): {bleu:.4f}")
 # Attention Visualization (example)
 # -------------------------------
 sample = next(iter(test_loader))
-src_text = en_tokenizer.decode(sample['src'][0].tolist(), skip_special_tokens=True)
-tgt_text = fr_tokenizer.decode(sample['tgt'][0].tolist(), skip_special_tokens=True)
+src_text = fr_tokenizer.decode(sample['src'][0].tolist(), skip_special_tokens=True)
+tgt_text = en_tokenizer.decode(sample['tgt'][0].tolist(), skip_special_tokens=True)
 print(f"\nVisualizing attention for:\nSource: {src_text}\nTarget: {tgt_text}")
 
 attn_weights = get_attention_weights(model, src_text, tgt_text, layer_idx=-1, head_idx=0)
 if attn_weights is not None:
-    src_tokens = en_tokenizer.tokenize(src_text)
-    tgt_tokens = fr_tokenizer.tokenize(tgt_text)
+    src_tokens = fr_tokenizer.tokenize(src_text)
+    tgt_tokens = en_tokenizer.tokenize(tgt_text)
     plot_attention(attn_weights, src_tokens, tgt_tokens,
                    os.path.join(ATTENTION_VIZ_DIR, "cross_attention.png"))
     print(f"Attention map saved to {ATTENTION_VIZ_DIR}/cross_attention.png")
@@ -449,10 +449,10 @@ else:
 # Live Translation Demo
 # -------------------------------
 def live_translate(sentence):
-    return translate_sentence(model, sentence, en_tokenizer, fr_tokenizer, beam_width=4)
+    return translate_sentence(model, sentence, fr_tokenizer, en_tokenizer, beam_width=4)
 
 # Example usage (uncomment for testing):
 # while True:
-#     eng = input("Enter English sentence: ")
-#     if eng.lower() == 'quit': break
-#     print("French:", live_translate(eng))
+#     fr = input("Enter French sentence: ")
+#     if fr.lower() == 'quit': break
+#     print("English:", live_translate(fr))

@@ -12,17 +12,14 @@ import seaborn as sns
 from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 import numpy as np
 
-CHECKPOINT_DIR = "checkpoints"
-
-
 # -------------------------------
 # Paths & Setup
 # -------------------------------
 MAX_LEN = 64 
 DATASET_PATH = "parallel_en_fr_corpus"
-EN_TOKENIZER_PATH = "tokenizer_en"
-FR_TOKENIZER_PATH = "tokenizer_fr"
-CHECKPOINT_DIR = "checkpoints"
+EN_TOKENIZER_PATH = "tokenizer_en_v2"
+FR_TOKENIZER_PATH = "tokenizer_fr_v2"
+CHECKPOINT_DIR = "checkpoints_fr_en"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 ATTENTION_VIZ_DIR = "attention_viz"
 os.makedirs(ATTENTION_VIZ_DIR, exist_ok=True)
@@ -45,16 +42,16 @@ en_tokenizer = PreTrainedTokenizerFast.from_pretrained(EN_TOKENIZER_PATH)
 fr_tokenizer = PreTrainedTokenizerFast.from_pretrained(FR_TOKENIZER_PATH)
 
 # Separate source and target pad tokens (critical)
-src_pad_id = en_tokenizer.pad_token_id
-tgt_pad_id = fr_tokenizer.pad_token_id
+src_pad_id = fr_tokenizer.pad_token_id
+tgt_pad_id = en_tokenizer.pad_token_id
 
-bos_token_id = fr_tokenizer.bos_token_id
-eos_token_id = fr_tokenizer.eos_token_id
+bos_token_id = en_tokenizer.bos_token_id
+eos_token_id = en_tokenizer.eos_token_id
 
-src_vocab_size = len(en_tokenizer)
-tgt_vocab_size = len(fr_tokenizer)
-print(f"Source vocab size: {src_vocab_size}")
-print(f"Target vocab size: {tgt_vocab_size}")
+src_vocab_size = len(fr_tokenizer)
+tgt_vocab_size = len(en_tokenizer)
+print(f"Source (FR) vocab size: {src_vocab_size}")
+print(f"Target (EN) vocab size: {tgt_vocab_size}")
 
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -67,7 +64,7 @@ def load_checkpoint(path, model, optimizer=None):
 
 from model import build_transformer   # Your model code (must store attention scores)
 
-d_model = 32; d_ff = 128; h = 4; N = 3; dropout = 0.1
+d_model = 512; d_ff = 2048; h = 8; N = 4; dropout = 0.1
 model = build_transformer(src_vocab_size, tgt_vocab_size,
                           MAX_LEN, MAX_LEN, d_model, N, h, dropout, d_ff)
 model.to(device)
@@ -124,19 +121,19 @@ def beam_search(model, src_tokens, src_mask, beam_width=4, max_len=64):
         best_seq = best_seq[:-1]
     return best_seq
 
-def translate_sentence(model, sentence, en_tokenizer, fr_tokenizer, beam_width=4):
-    tokens = en_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
+def translate_sentence(model, sentence, fr_tokenizer, en_tokenizer, beam_width=4):
+    tokens = fr_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
     src_ids = tokens['input_ids'].to(device)
     src_mask = (src_ids != src_pad_id).unsqueeze(1).unsqueeze(2).bool()
     pred_ids = beam_search(model, src_ids, src_mask, beam_width)
-    return fr_tokenizer.decode(pred_ids, skip_special_tokens=True)
+    return en_tokenizer.decode(pred_ids, skip_special_tokens=True)
 def live_translate(sentence):
-    return translate_sentence(model, sentence, en_tokenizer, fr_tokenizer, beam_width=4)
+    return translate_sentence(model, sentence, fr_tokenizer, en_tokenizer, beam_width=4)
 
 
 
-src_test = "i am a cat"
-tokens = en_tokenizer(src_test, return_tensors='pt')
+src_test = "je suis un chat"
+tokens = fr_tokenizer(src_test, return_tensors='pt')
 src_ids = tokens['input_ids'].to(device)
 src_mask = (src_ids != src_pad_id).unsqueeze(1).unsqueeze(2)
 enc_out = model.encode(src_ids, src_mask)
@@ -155,4 +152,4 @@ for _ in range(20):
     if next_token == eos_token_id:
         break
     tgt_ids.append(next_token)
-print(f"Greedy translation: {fr_tokenizer.decode(tgt_ids[1:])}")
+print(f"Greedy translation: {en_tokenizer.decode(tgt_ids[1:])}")

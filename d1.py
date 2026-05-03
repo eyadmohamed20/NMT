@@ -18,9 +18,9 @@ from collections import Counter
 # PATHS & SETUP
 # ============================================================================
 DATASET_PATH = "parallel_en_fr_corpus"
-EN_TOKENIZER_PATH = "tokenizer_en"
-FR_TOKENIZER_PATH = "tokenizer_fr"
-CHECKPOINT_DIR = "checkpoints_fixed"
+EN_TOKENIZER_PATH = "tokenizer_en_v2"
+FR_TOKENIZER_PATH = "tokenizer_fr_v2"
+CHECKPOINT_DIR = "checkpoints_fr_en"
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
@@ -42,15 +42,15 @@ print("\nLoading tokenizers...")
 en_tokenizer = PreTrainedTokenizerFast.from_pretrained(EN_TOKENIZER_PATH)
 fr_tokenizer = PreTrainedTokenizerFast.from_pretrained(FR_TOKENIZER_PATH)
 
-src_pad_id = en_tokenizer.pad_token_id
-tgt_pad_id = fr_tokenizer.pad_token_id
-bos_token_id = fr_tokenizer.bos_token_id
-eos_token_id = fr_tokenizer.eos_token_id
+src_pad_id = fr_tokenizer.pad_token_id
+tgt_pad_id = en_tokenizer.pad_token_id
+bos_token_id = en_tokenizer.bos_token_id
+eos_token_id = en_tokenizer.eos_token_id
 
-src_vocab_size = len(en_tokenizer)
-tgt_vocab_size = len(fr_tokenizer)
+src_vocab_size = len(fr_tokenizer)
+tgt_vocab_size = len(en_tokenizer)
 
-print(f"Source vocab: {src_vocab_size}, Target vocab: {tgt_vocab_size}")
+print(f"Source (FR) vocab: {src_vocab_size}, Target (EN) vocab: {tgt_vocab_size}")
 print(f"PAD: {tgt_pad_id}, BOS: {bos_token_id}, EOS: {eos_token_id}")
 
 # ============================================================================
@@ -59,15 +59,15 @@ print(f"PAD: {tgt_pad_id}, BOS: {bos_token_id}, EOS: {eos_token_id}")
 MAX_LEN = 32
 
 def tokenize_pair(example):
-    src = en_tokenizer(
-        example['text_en'],
+    src = fr_tokenizer(
+        example['text_fr'],
         add_special_tokens=True,
         max_length=MAX_LEN,
         truncation=True,
         padding=False
     )['input_ids']
-    tgt = fr_tokenizer(
-        example['text_fr'],
+    tgt = en_tokenizer(
+        example['text_en'],
         add_special_tokens=True,
         max_length=MAX_LEN,
         truncation=True,
@@ -280,11 +280,11 @@ def beam_search(model, src_tokens, src_mask, beam_width=4, max_len=32, min_len=5
 # ============================================================================
 def translate_sentence(model, sentence, min_len=5):
     model.eval()
-    tokens = en_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
+    tokens = fr_tokenizer(sentence, add_special_tokens=True, return_tensors='pt')
     src_ids = tokens['input_ids'].to(device)
     src_mask = (src_ids != src_pad_id).unsqueeze(1).unsqueeze(2)
     pred_ids = beam_search(model, src_ids, src_mask, min_len=min_len)
-    return fr_tokenizer.decode(pred_ids, skip_special_tokens=True)
+    return en_tokenizer.decode(pred_ids, skip_special_tokens=True)
 
 # ============================================================================
 # DEBUG FUNCTION
@@ -314,7 +314,7 @@ def debug_prediction(model, epoch):
     print(f"DEBUG (Epoch {epoch})")
     print("="*70)
     
-    test_sentences = ["i am a cat", "i am happy", "i am a student"]
+    test_sentences = ["je suis un chat", "je suis heureux", "je suis étudiant"]
     
     for sent in test_sentences:
         translation = translate_sentence(model, sent, min_len=3)
@@ -509,17 +509,17 @@ print("\n" + "="*70)
 print("SAMPLE TRANSLATIONS")
 print("="*70)
 test_examples = [
-    "i am a cat",
-    "i am happy",
-    "i am a student",
-    "he is my friend",
-    "she is beautiful"
+    "je suis un chat",
+    "je suis heureux",
+    "je suis étudiant",
+    "il est mon ami",
+    "elle est belle"
 ]
 
 for sentence in test_examples:
     translation = translate_sentence(model, sentence, min_len=3)
-    print(f"EN: {sentence}")
-    print(f"FR: {translation}\n")
+    print(f"FR: {sentence}")
+    print(f"EN: {translation}\n")
 
 print("="*70)
 print("TRAINING COMPLETE")
