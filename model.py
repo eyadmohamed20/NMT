@@ -10,39 +10,18 @@ class InputEmbedding(nn.Module):
         self.embedding = nn.Embedding(vocab_size, d_model)
 
     def forward(self, x):
-        return self.embedding(x) * math.sqrt(self.d_model)
+        return self.embedding(x)
     
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model : int, seq_len: int, dropout: float) -> None:
         super().__init__()
         self.d_model = d_model
         self.seq_len = seq_len
-        self.dropout = nn.Dropout(dropout)
-
-
-        pe = torch.zeros(seq_len, d_model)
-
-        #indices
-        positions = torch.arange(0, seq_len , dtype = float).unsqueeze(1)
-        # denominator 
-        div_term = torch.exp(torch.arange(0,d_model,2).float() * (-math.log(10000.0)/d_model))
-
-        # applying sin for even indecies and cos for odd ones
-        pe[:,0::2] = torch.sin(positions * div_term)
-        pe[:,1::2] = torch.cos(positions * div_term)
-        
-        #adding batch dim for broadcasting later
-        pe = pe.unsqueeze(0)
-
-        # to keep it extractable with the model 
-        self.register_buffer('pe', pe)
+        self.position_embedding = nn.Embedding(seq_len, d_model)
 
     def forward(self, x):
-        """
-            adds PE to reuqired sentence 
-        """
-        x = x + (self.pe[:,:x.shape[1],:]).requires_grad_(False)
-        return self.dropout(x)
+        positions = torch.arange(0, x.shape[1], device=x.device).unsqueeze(0)
+        return x + self.position_embedding(positions)
 
 
 class LayerNormalization(nn.Module):
@@ -68,7 +47,6 @@ class FeedForwardBlock(nn.Module):
     def __init__(self,d_model: int, d_ff: int, dropout: float, activation = 'relu') -> None:
         super().__init__()
         self.linear1 = nn.Linear(d_model,d_ff) #W1 and B2
-        self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(d_ff, d_model)
 
         if activation == 'gelu':
@@ -83,7 +61,6 @@ class FeedForwardBlock(nn.Module):
         #(Batch,seq_len, d_model) --> (Batch,seq_len, d_ff) --> (Batch,seq_len, d_model)
         x = self.linear1(x)
         x = self.activation(x)
-        x = self.dropout(x)
         x = self.linear2(x)
         return x
 
@@ -103,21 +80,17 @@ class MultiHeadAttentionBlock(nn.Module):
             self.w_v = nn.Linear(d_model,d_model) # Wv
 
             self.w_o = nn.Linear(d_model,d_model) # Wo
-
-            self.dropout = nn.Dropout(dropout)
     @staticmethod 
 
-    def attention(query, key, value, mask, dropout: nn.Dropout):
+    def attention(query, key, value, mask):
         d_k = query.shape[-1] 
 
         #(Batch, h, seq_len, d_k) --> (Batch, h ,seq_len, seq_len)
         attention_scores =  (query @ key.transpose(-2,-1)) / math.sqrt(d_k)
         
         if mask is not None:
-            attention_scores.masked_fill(~mask, -1e9)
+            attention_scores = attention_scores.masked_fill(~mask, -1e9)
         attention_scores = attention_scores.softmax(dim = -1)
-        if dropout is not None:
-            attention_scores = dropout(attention_scores)
 
         return (attention_scores @ value), attention_scores
 
@@ -131,7 +104,7 @@ class MultiHeadAttentionBlock(nn.Module):
         query =query.view(query.shape[0],query.shape[1], self.h, self.d_k).transpose(1,2)
         key = key.view(key.shape[0], key.shape[1], self.h, self.d_k).transpose(1,2)
         value = value.view(value.shape[0], value.shape[1], self.h, self.d_k).transpose(1,2)
-        x, self.attention_scores = MultiHeadAttentionBlock.attention(query,key,value, mask, self.dropout)
+        x, self.attention_scores = MultiHeadAttentionBlock.attention(query,key,value, mask)
         
         #(Batch, h ,seq_len, d_k) --> (Batch, seq_len, h, d_k) --> (Batch, seq_len, d_model(dv))
         x = x.transpose(1,2).contiguous().view(x.shape[0], -1, self.h * self.d_k)
@@ -202,7 +175,7 @@ class Decoder(nn.Module):
 class ProjectionLayer(nn.Module):
     def __init__(self, d_model: int , vocab_size: int) -> None:
         super().__init__()
-        self.proj = nn.Linear(d_model,vocab_size)
+        self.proj = nn.Linear(d_model, vocab_size, bias=False)
 
     def forward(self,x):
         # (batch, Seq_len, d_model) -> (batch, Seq_len, Vocab_size)
@@ -272,6 +245,7 @@ def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int
 
     # create tranformer
     transformer = Transformer(encoder,decoder,src_embed,tgt_embed,src_pos,tgt_pos,projection_layer)
+    transformer.projection_layer.proj.weight = transformer.tgt_embed.embedding.weight
 
 
     # initializing the parameters 
